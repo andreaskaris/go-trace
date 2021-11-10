@@ -12,7 +12,7 @@ import (
 	syscall "golang.org/x/sys/unix"
 )
 
-func ListChildren(pid int) ([]int, error) {
+func listChildren(pid int) ([]int, error) {
 	var children []int
 
 	files, err := os.ReadDir(
@@ -34,6 +34,13 @@ func ListChildren(pid int) ([]int, error) {
 }
 
 func strace(pid int, follow bool) (err error, detachErr error) {
+	// must lock OSThread, otherwise we'll get no such process errors
+	// https://github.com/golang/go/issues/43685
+	// https://github.com/golang/go/issues/7699
+	// https://pkg.go.dev/runtime#LockOSThread
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	var regs syscall.PtraceRegs = syscall.PtraceRegs{}
 	var exit bool
 
@@ -98,7 +105,7 @@ func Strace(pid int, follow bool) error {
 	var err error
 	attachTo := []int{pid}
 	if follow {
-		attachTo, err = ListChildren(pid)
+		attachTo, err = listChildren(pid)
 		if err != nil {
 			return err
 		}
@@ -108,11 +115,6 @@ func Strace(pid int, follow bool) error {
 	for _, pid := range attachTo {
 		wg.Add(1)
 		go func(pid int) {
-			// must lock OSThread, otherwise we'll get no such process errors
-			// https://github.com/golang/go/issues/43685
-			// https://pkg.go.dev/runtime#LockOSThread
-			runtime.LockOSThread()
-			defer runtime.UnlockOSThread()
 			defer wg.Done()
 			err, detachErr := strace(pid, follow)
 			if err != nil {

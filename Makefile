@@ -3,3 +3,6 @@ build:
 
 build-test:
 	go build -o bin/testcmd cmd/testcmd/testcmd.go
+
+build-ctest:
+	gcc -pthread -o bin/testccmd cmd/testccmd/testccmd.c
