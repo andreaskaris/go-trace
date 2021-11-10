@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime"
 	"strconv"
 	"sync"
 	"time"
@@ -32,13 +33,12 @@ func ListChildren(pid int) ([]int, error) {
 	return children, nil
 }
 
-func Strace(pid int) (err error, detachErr error) {
-	//var wpid int
-	//var ws *syscall.WaitStatus
+func strace(pid int, follow bool) (err error, detachErr error) {
 	var regs syscall.PtraceRegs = syscall.PtraceRegs{}
 	var exit bool
 
 	// attach
+	log.Printf("syscall.PtraceAttach(%d)", pid)
 	err = syscall.PtraceAttach(pid)
 	if err != nil {
 		err = fmt.Errorf("Error in syscall.PtraceAttach(%d): %s", pid, err.Error())
@@ -55,9 +55,14 @@ func Strace(pid int) (err error, detachErr error) {
 	if err != nil {
 		return
 	}
-	// fmt.Printf("pid: %d, wpid: %d, WaitStatus: %v\n", pid, wpid, ws)
+
 	// set ptrace options
-	err = syscall.PtraceSetOptions(pid, syscall.PTRACE_O_TRACESYSGOOD|syscall.PTRACE_O_TRACEFORK|syscall.PTRACE_O_TRACEVFORK|syscall.PTRACE_O_TRACECLONE|syscall.PTRACE_O_TRACEEXEC|syscall.PTRACE_O_TRACEEXIT)
+	options := syscall.PTRACE_O_TRACESYSGOOD | syscall.PTRACE_O_TRACEEXEC | syscall.PTRACE_O_TRACEEXIT
+	if follow {
+		options = syscall.PTRACE_O_TRACESYSGOOD | syscall.PTRACE_O_TRACEFORK | syscall.PTRACE_O_TRACEVFORK | syscall.PTRACE_O_TRACECLONE | syscall.PTRACE_O_TRACEEXEC | syscall.PTRACE_O_TRACEEXIT
+	}
+
+	err = syscall.PtraceSetOptions(pid, options)
 	if err != nil {
 		err = fmt.Errorf("Failed at syscall.PtraceSetOptions(%d): %s", pid, err.Error())
 		return
@@ -89,18 +94,27 @@ func Strace(pid int) (err error, detachErr error) {
 	}
 }
 
-func StraceAll(pid int) error {
-	children, err := ListChildren(pid)
-	if err != nil {
-		return err
+func Strace(pid int, follow bool) error {
+	var err error
+	attachTo := []int{pid}
+	if follow {
+		attachTo, err = ListChildren(pid)
+		if err != nil {
+			return err
+		}
 	}
 
 	wg := sync.WaitGroup{}
-	for _, pid := range children {
+	for _, pid := range attachTo {
 		wg.Add(1)
 		go func(pid int) {
+			// must lock OSThread, otherwise we'll get no such process errors
+			// https://github.com/golang/go/issues/43685
+			// https://pkg.go.dev/runtime#LockOSThread
+			runtime.LockOSThread()
+			defer runtime.UnlockOSThread()
 			defer wg.Done()
-			err, detachErr := Strace(pid)
+			err, detachErr := strace(pid, follow)
 			if err != nil {
 				log.Print(err)
 			}
